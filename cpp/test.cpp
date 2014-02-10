@@ -16,6 +16,9 @@ using namespace std;
 #define RangeMax() y()
 #define RangeMin() x()
 
+#define WIDTH 512
+#define HEIGHT 512
+
 class SDF{
 public:
 	SDF(int width, int height){
@@ -77,8 +80,8 @@ void Create2DSphereSDF(SDF &sdf){
 		for(int j = 0; j < sdf.GetCols(); j++){
 			Eigen::Vector2f point(j, i);
 
-			//sdf(j, i) = clamp( (point - center).norm() - 100, -10, 10);
-			sdf(j, i) = (point - center).norm() - 100;
+			sdf(j, i) = clamp( (point - center).norm() - 100, -10, 10);
+			//sdf(j, i) = (point - center).norm() - 100;
 			
 			
 		}
@@ -151,9 +154,9 @@ float XYBoxFilterResponse(float **integral, int x, int y){
 void ConvolveBoxFilters(SDF &sdf, float **integral){
 
 	float **temp;
-	temp = (float **)malloc(512*sizeof(float *));
-	for(int i = 0; i < 512; i++)
-		temp[i] = (float *)malloc(512*sizeof(float));
+	temp = (float **)malloc(HEIGHT*sizeof(float *));
+	for(int i = 0; i < HEIGHT; i++)
+		temp[i] = (float *)malloc(WIDTH*sizeof(float));
 
 	float max = -99999, min = 9999;
 	for(int i = 4; i < sdf.GetRows()-4; i++){
@@ -170,11 +173,11 @@ void ConvolveBoxFilters(SDF &sdf, float **integral){
 		}
 	}
 
-	IplImage *img = cvCreateImage(cvSize(512,512), IPL_DEPTH_8U, 1);
+	IplImage *img = cvCreateImage(cvSize(WIDTH,HEIGHT), IPL_DEPTH_8U, 1);
 	float scale = 255.0f / (max - min);
 
-	for(int i = 4; i < 512-4; i++){
-		for(int j = 4; j < 512-4; j++){
+	for(int i = 4; i < WIDTH-4; i++){
+		for(int j = 4; j < HEIGHT-4; j++){
 			img->imageData[i*img->widthStep + j] = (char)((int)(scale * (temp[i][j] - min)));
 		}
 	}
@@ -184,11 +187,57 @@ void ConvolveBoxFilters(SDF &sdf, float **integral){
 	cvWaitKey(0);
 
 	printf("%f %f\n", max, min);
-
+	cin.get();
 }
 
+void ComputeDetHessian(float **integral, float **hessian, bool **sgnLog, int size) {
+	hessian = (float **)malloc(HEIGHT*sizeof(float *));
+	for(int i = 0; i < HEIGHT; i++)
+		hessian[i] = (float *)malloc(WIDTH*sizeof(float));
+	sgnLog = (bool **)malloc(HEIGHT*sizeof(bool *));
+	for(int i = 0; i < HEIGHT; i++)
+		sgnLog[i] = (bool *)malloc(WIDTH*sizeof(bool));
+	const int s = size / 3, safe = (size - 1) / 2, off = size / 3 - 1;
+	int width = WIDTH - safe, height = HEIGHT - safe;
+	float dxx,dyy,dxy;
+	for(int j = safe; j < height; j++) {
+		for(int i = safe; i < width; i++) {
+			float top, middle, bottom;
+			const int ip1 = i + 1, ip2 = i + off, ip3 = i + s, ip4 = i + safe;
+			const int im1 = i - 1, im2 = i - off, im3 = i - s, im4 = i - safe;						
+			const int jp1 = j + 1, jp2 = j + off, jp3 = j + s, jp4 = j + safe;
+			const int jm1 = j - 1, jm2 = j - off, jm3 = j - s, jm4 = j - safe;
 
-int main(){
+			//dyy
+			top = integral[im2][jm4] + integral[ip2][jm2] - integral[im2][jm2] - integral[ip2][jm4];
+			middle = integral[im2][jm1] + integral[ip2][jp1] - integral[im2][jp1] - integral[ip2][jm1];
+			bottom = integral[im2][jp2] + integral[ip2][jp4] - integral[im2][jp4] - integral[ip2][jp2];
+			dyy = top + bottom - 2 * middle;
+
+			//dxx
+			top = integral[im4][jm2] + integral[im2][jp2] - integral[im4][jp2] - integral[im2][jm2];
+			middle = integral[im2][jm2] + integral[ip2][jp2] - integral[im2][jp2] - integral[ip2][jm2];
+			bottom = integral[ip2][jm2] + integral[ip4][jp2] - integral[im4][jp2] - integral[ip4][jm2];
+			dxx = top + bottom - 2 * middle;
+			
+			//dxy
+			float tl, tr, bl, br;
+			tl = integral[im3][jm3] + integral[im1][jm1] - integral[im3][jm1] - integral[im1][jm3];
+			tr = integral[ip1][jm3] + integral[ip3][jm1] - integral[ip1][jm1] - integral[ip3][jm3];
+			bl = integral[im3][jp1] + integral[im1][jp3] - integral[im3][jp3] - integral[im1][jp1];
+			br = integral[ip1][jp1] + integral[ip3][jp3] - integral[ip1][jp3] - integral[ip3][jp1];
+			dxy = tl + br - bl - tr;
+
+			//det hessian
+			float a = 0.9f * dxy;
+			hessian[i][j] = dxx*dyy - a * a;
+			if(dxx + dyy > 0)
+				sgnLog[i][j] = true;
+		}
+	}
+}
+
+int main() {
 	SDF sdf(512,512);
 	Create2DSphereSDF(sdf);
 
